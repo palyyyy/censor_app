@@ -1,0 +1,12 @@
+# ---- GUI ----
+customtkinter>=5.2.2
+
+# ---- Audio I/O & processing ----
+sounddevice>=0.4.7       # mic in / speaker out, device enumeration
+soundfile>=0.12.1        # read/write wav/flac/ogg
+pydub>=0.25.1            # mp3 <-> wav convenience (requires ffmpeg installed on system)
+numpy>=1.26.0
+scipy>=1.11.0            # resampling, signal helpers
+
+# ---- STT engines ----
+faster-whisper>=1.0.3

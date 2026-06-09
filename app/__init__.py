@@ -1,0 +1,1 @@
+"""CensorApp package."""
