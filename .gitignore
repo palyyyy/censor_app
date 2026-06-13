@@ -10,3 +10,10 @@ Thumbs.db
 *.log
 *_censored.wav
 *_censored.mp3
+eval_harness.py
+results/
+targets.txt
+__pycache__/
+*.pyc
+.DS_Store
+.venv/
