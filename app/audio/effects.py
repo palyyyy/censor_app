@@ -52,26 +52,7 @@ def _load_sfx_cached(path: str, sample_rate: int) -> np.ndarray:
     return data.astype(np.float32)
 
 
-def load_sfx(path: str | Path, duration_s: float, sample_rate: int,
-             stretch: bool = False) -> np.ndarray:
-    p = str(path)
-    sfx = _load_sfx_cached(p, sample_rate).copy()
-    target_n = max(1, int(round(duration_s * sample_rate)))
-
-    if sfx.size == 0:
-        return generate_silence(duration_s, sample_rate)
-
-    if stretch:
-        out = resample_poly(sfx, target_n, sfx.size).astype(np.float32)
-        # resample_poly may return +/- 1 sample; pad/truncate exactly
-        if out.size < target_n:
-            out = np.pad(out, (0, target_n - out.size))
-        return out[:target_n]
-
-    if sfx.size >= target_n:
-        return sfx[:target_n]
-
-    # Loop to fill.
-    reps = int(np.ceil(target_n / sfx.size))
-    tiled = np.tile(sfx, reps)[:target_n]
-    return tiled.astype(np.float32)
+def load_sfx_clip(path: str | Path, sample_rate: int) -> np.ndarray:
+    """The complete sound-effect clip at its natural speed, resampled to
+    ``sample_rate``. Returns an empty array only if the file itself is empty."""
+    return _load_sfx_cached(str(path), sample_rate).copy()

@@ -2,19 +2,21 @@ from __future__ import annotations
 
 import threading
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Callable, Optional
 
 import numpy as np
 import sounddevice as sd
 
-from app.audio.effects import generate_beep, generate_silence, load_sfx
+import app.audio.censor_effects  # noqa: F401  (registers the concrete effects)
 from app.censor import CensorList, WordMatcher
-from app.censor.censor_rules import CensorMode
+from app.censor.effects import EffectOptions, create_effects
 from app.stt.base import STTEngine, Word
 from app.utils.logger import get_logger
 
 log = get_logger(__name__)
+
+_OVERLAP_SECONDS = 0.25  # window overlap that protects words on chunk boundaries
 
 
 @dataclass
@@ -26,13 +28,21 @@ class LiveConfig:
     input_device: int | str | None = None
     output_device: int | str | None = None
     padding_ms: float = 50.0
+    sfx_tail: bool = False
 
 
 @dataclass
-class _PendingWord:
-    word: Word
-    rule_mode: CensorMode
-    sfx_path: Optional[str]
+class _ActiveEffect:
+    """A fully rendered effect anchored at an absolute stream position.
+
+    The first ``replace_samples`` samples of ``audio`` overwrite the signal
+    (the censored region itself); anything beyond that is a tail that is
+    mixed over the audio that follows.
+    """
+
+    start_sample: int
+    replace_samples: int
+    audio: np.ndarray
 
 
 class LiveProcessor:
@@ -40,22 +50,23 @@ class LiveProcessor:
         self.engine = engine
         self.config = config
         self.matcher = WordMatcher(censor_list)
+        self._effects = create_effects(EffectOptions(sfx_tail=config.sfx_tail))
 
         self._ring: np.ndarray | None = None
         self._ring_lock = threading.Lock()
-        self._write_idx = 0          
-        self._play_idx = 0           
+        self._write_idx = 0
+        self._play_idx = 0
 
         self._in_stream: sd.InputStream | None = None
         self._out_stream: sd.OutputStream | None = None
         self._stt_thread: threading.Thread | None = None
         self._stop_evt = threading.Event()
 
-        self._pending: list[_PendingWord] = []
-        self._pending_lock = threading.Lock()
+        self._active: list[_ActiveEffect] = []
+        self._active_lock = threading.Lock()
 
-        self._last_stt_end_sample = 0      
-        self.on_word: Callable[[Word, bool], None] | None = None  
+        self._last_stt_end_sample = 0
+        self.on_word: Callable[[Word, bool], None] | None = None
 
     @property
     def _ring_size(self) -> int:
@@ -65,18 +76,20 @@ class LiveProcessor:
     def _sample_to_time(self, sample_idx: int) -> float:
         return sample_idx / self.config.sample_rate
 
+    # ------------------------------------------------------------------
+    # Lifecycle
+
     def start(self) -> None:
         if self._in_stream is not None:
             return
         self._stop_evt.clear()
 
-        size = self._ring_size
-        self._ring = np.zeros(size, dtype=np.float32)
+        self._ring = np.zeros(self._ring_size, dtype=np.float32)
         self._write_idx = 0
         self._play_idx = 0
         self._last_stt_end_sample = 0
-        with self._pending_lock:
-            self._pending.clear()
+        with self._active_lock:
+            self._active.clear()
 
         sr = self.config.sample_rate
         bs = self.config.block_size
@@ -123,6 +136,9 @@ class LiveProcessor:
             self._stt_thread = None
         log.info("Live processor stopped")
 
+    # ------------------------------------------------------------------
+    # Ring buffer
+
     def _ring_write(self, samples: np.ndarray) -> None:
         assert self._ring is not None
         n = samples.size
@@ -159,6 +175,9 @@ class LiveProcessor:
                 out[first:n] = self._ring[:n - first]
         return out
 
+    # ------------------------------------------------------------------
+    # Audio callbacks
+
     def _on_input(self, indata, frames, time_info, status):  # noqa: D401
         if status:
             log.debug("input status: %s", status)
@@ -192,110 +211,120 @@ class LiveProcessor:
             outdata[:] = block
         self._play_idx = end
 
+    # ------------------------------------------------------------------
+    # Effect splicing
 
     def _splice_censors(self, block: np.ndarray, start_sample: int) -> np.ndarray:
-        """Replace regions of ``block`` that correspond to pending censor words."""
-        if not self._pending:
-            return block
-
-        sr = self.config.sample_rate
-        block_start_s = start_sample / sr
-        block_end_s = (start_sample + block.size) / sr
-        pad = self.config.padding_ms * 1e-3
-
-        still_pending: list[_PendingWord] = []
-        with self._pending_lock:
-            for pw in self._pending:
-                w = pw.word
-                w_start = max(0.0, w.start - pad)
-                w_end = w.end + pad
-
-                if w_end < block_start_s:
-                    continue
-                if w_start > block_end_s:
-                    still_pending.append(pw)
-                    continue
-
-                # Overlap: splice.
-                lo_s = max(w_start, block_start_s)
-                hi_s = min(w_end, block_end_s)
-                lo_i = int(round((lo_s - block_start_s) * sr))
-                hi_i = int(round((hi_s - block_start_s) * sr))
-                lo_i = max(0, lo_i)
-                hi_i = min(block.size, hi_i)
-                region_n = hi_i - lo_i
-                if region_n <= 0:
-                    still_pending.append(pw)
-                    continue
-                dur = region_n / sr
-
-                if pw.rule_mode == CensorMode.BEEP:
-                    rep = generate_beep(dur, sr)
-                elif pw.rule_mode == CensorMode.SILENCE:
-                    rep = generate_silence(dur, sr)
-                elif pw.rule_mode == CensorMode.SFX and pw.sfx_path:
-                    rep = load_sfx(pw.sfx_path, dur, sr, stretch=True)
-                else:
-                    rep = generate_beep(dur, sr)
-
-                if rep.size < region_n:
-                    rep = np.pad(rep, (0, region_n - rep.size))
-                block[lo_i:hi_i] = rep[:region_n]
-
-                if w_end > block_end_s:
-                    still_pending.append(pw)
-
-            self._pending = still_pending
+        """Overlay every active effect on ``block`` and retire finished ones."""
+        block_end = start_sample + block.size
+        with self._active_lock:
+            if not self._active:
+                return block
+            still_active: list[_ActiveEffect] = []
+            for eff in self._active:
+                eff_end = eff.start_sample + eff.audio.size
+                if eff_end <= start_sample:
+                    continue  # entirely in the past
+                if eff.start_sample < block_end:
+                    self._apply_effect(block, start_sample, eff)
+                if eff_end > block_end:
+                    still_active.append(eff)
+            self._active = still_active
         return block
 
+    @staticmethod
+    def _apply_effect(block: np.ndarray, block_start: int, eff: _ActiveEffect) -> None:
+        """Write one effect's overlap with ``block``: replace, then mix the tail."""
+        lo = max(eff.start_sample, block_start)
+        hi = min(eff.start_sample + eff.audio.size, block_start + block.size)
+        if hi <= lo:
+            return
+        n = hi - lo
+        s0 = lo - eff.start_sample
+        d0 = lo - block_start
+        src = eff.audio[s0:s0 + n]
+
+        split = int(np.clip(eff.replace_samples - s0, 0, n))
+        if split > 0:
+            block[d0:d0 + split] = src[:split]
+        if split < n:
+            mixed = block[d0 + split:d0 + n] + src[split:]
+            block[d0 + split:d0 + n] = np.clip(mixed, -1.0, 1.0)
+
+    # ------------------------------------------------------------------
+    # Transcription thread
 
     def _stt_loop(self) -> None:
-        sr = self.config.sample_rate
-        chunk_samples = int(self.config.chunk_seconds * sr)
-
+        """Repeatedly transcribe the newest window and queue matched effects."""
         while not self._stop_evt.is_set():
-            if self._write_idx - self._last_stt_end_sample < chunk_samples:
+            bounds = self._next_window()
+            if bounds is None:
                 time.sleep(0.02)
                 continue
+            start, end = bounds
+            self._handle_words(self._transcribe(start, end))
+            self._last_stt_end_sample = end
 
-            window_end = self._write_idx
-            # Give a bit of overlap for word boundaries
-            overlap_samples = int(0.25 * sr)
-            window_start = max(self._last_stt_end_sample - overlap_samples, 0)
-            n = window_end - window_start
-            if n < sr // 4:
-                time.sleep(0.02)
+    def _next_window(self) -> tuple[int, int] | None:
+        """Sample bounds of the next transcription window, or None if there is
+        not yet a full chunk of new audio. The window starts slightly before
+        the previously processed audio so words on a chunk boundary are not
+        split and missed."""
+        sr = self.config.sample_rate
+        if self._write_idx - self._last_stt_end_sample < int(self.config.chunk_seconds * sr):
+            return None
+        end = self._write_idx
+        start = max(self._last_stt_end_sample - int(_OVERLAP_SECONDS * sr), 0)
+        if end - start < sr // 4:
+            return None
+        return start, end
+
+    def _transcribe(self, start: int, end: int) -> list[Word]:
+        """Transcribe ring samples ``[start, end)`` with absolute timestamps."""
+        audio = self._ring_read(start, end - start)
+        try:
+            return self.engine.transcribe_chunk(
+                audio, self.config.sample_rate,
+                time_offset=self._sample_to_time(start))
+        except Exception as e:
+            log.warning("STT chunk failed: %s", e)
+            return []
+
+    def _handle_words(self, words: list[Word]) -> None:
+        """Match recognised words and queue a rendered effect for each hit.
+
+        A word that ends inside the already-processed audio was handled by
+        the previous, overlapping window and is skipped, so the overlap does
+        not produce duplicate detections.
+        """
+        sr = self.config.sample_rate
+        pad = self.config.padding_ms * 1e-3
+        for w in words:
+            if w.end * sr < self._last_stt_end_sample:
+                continue  # already handled by the previous window
+            rule = self.matcher.match(w.text)
+            self._notify_word(w, censored=rule is not None)
+            if rule is None:
+                continue
+            effect = self._effects.get(rule.mode)
+            if effect is None:
                 continue
 
-            audio = self._ring_read(window_start, n)
-            time_offset = window_start / sr
+            start = max(int(round((w.start - pad) * sr)), 0)
+            region = max(int(round((w.end + pad) * sr)) - start, 1)
+            rendered = effect.render(rule, region, sr)
+            audio = (np.concatenate([rendered.replacement, rendered.tail])
+                     if rendered.tail.size else rendered.replacement)
+            with self._active_lock:
+                self._active.append(_ActiveEffect(
+                    start_sample=start,
+                    replace_samples=region,
+                    audio=audio.astype(np.float32, copy=False),
+                ))
 
+    def _notify_word(self, word: Word, censored: bool) -> None:
+        if self.on_word:
             try:
-                words = self.engine.transcribe_chunk(audio, sr, time_offset=time_offset)
-            except Exception as e:
-                log.warning("STT chunk failed: %s", e)
-                self._last_stt_end_sample = window_end
-                continue
-
-            for w in words:
-                # Ignore words that are entirely inside the overlap region we've
-                # already processed (best-effort dedup).
-                if w.end * sr < self._last_stt_end_sample - overlap_samples:
-                    continue
-                rule = self.matcher.match(w.text)
-                censored = rule is not None
-                if self.on_word:
-                    try:
-                        self.on_word(w, censored)
-                    except Exception:
-                        pass
-                if not censored:
-                    continue
-                with self._pending_lock:
-                    self._pending.append(_PendingWord(
-                        word=w,
-                        rule_mode=rule.mode,
-                        sfx_path=rule.sfx_path,
-                    ))
-
-            self._last_stt_end_sample = window_end
+                self.on_word(word, censored)
+            except Exception:
+                pass

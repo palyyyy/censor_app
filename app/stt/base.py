@@ -3,7 +3,7 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Iterable, Iterator, Sequence
+from typing import ClassVar, Sequence
 
 import numpy as np
 
@@ -27,8 +27,8 @@ class Transcript:
 
 
 class STTEngine(ABC):
-    display_name: str = "abstract"
-    name: str = "abstract"
+    name: ClassVar[str]
+    display_name: ClassVar[str]
 
     def __init__(self, model: str, language: str | None = "en") -> None:
         self.model = model
@@ -39,8 +39,9 @@ class STTEngine(ABC):
         return True
 
     @classmethod
+    @abstractmethod
     def available_models(cls) -> Sequence[str]:
-        return ("tiny.en", "base.en", "small.en", "medium.en", "large-v3")
+        """The models this engine can load."""
 
     @abstractmethod
     def transcribe_file(self, audio_path: str | Path) -> Transcript:
@@ -62,4 +63,3 @@ class STTEngine(ABC):
 
     def close(self) -> None:
         """Release any model/resources. Default is a no-op."""
-        pass

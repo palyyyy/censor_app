@@ -5,7 +5,8 @@ from typing import Optional
 
 import customtkinter as ctk
 
-from app.audio.device_manager import list_input_devices, list_output_devices
+from app.audio.device_manager import (find_device_by_name, list_input_devices,
+                                      list_output_devices)
 from app.audio.live_processor import LiveConfig, LiveProcessor
 from app.censor import CensorList
 from app.stt import get_engine
@@ -17,6 +18,8 @@ from .components import WordListEditor
 
 log = get_logger(__name__)
 
+_NO_PRESET = "—"
+
 
 class LiveModeWindow(ctk.CTkToplevel):
     def __init__(self, master, settings: AppSettings) -> None:
@@ -25,21 +28,23 @@ class LiveModeWindow(ctk.CTkToplevel):
         self.censor_list = CensorList()
 
         self.title("Live censoring")
-        self.geometry("980x680")
-        self.minsize(820, 600)
+        self.geometry("980x720")
+        self.minsize(820, 620)
 
         self._processor: Optional[LiveProcessor] = None
         self._start_thread: Optional[threading.Thread] = None
+        self._in_display_to_name: dict[str, str] = {}
+        self._out_display_to_name: dict[str, str] = {}
 
         self._build()
         self._refresh_devices()
+        self._refresh_presets()
 
     def _build(self) -> None:
         self.grid_columnconfigure(0, weight=3)
         self.grid_columnconfigure(1, weight=2)
         self.grid_rowconfigure(1, weight=1)
 
-        # Top bar: device dropdowns + refresh
         top = ctk.CTkFrame(self, fg_color="transparent")
         top.grid(row=0, column=0, columnspan=2, sticky="ew", padx=16, pady=(16, 8))
         top.grid_columnconfigure(1, weight=1)
@@ -57,6 +62,21 @@ class LiveModeWindow(ctk.CTkToplevel):
 
         ctk.CTkButton(top, text="↻ Refresh", width=90, command=self._refresh_devices) \
             .grid(row=0, column=4, sticky="e")
+
+        ctk.CTkLabel(top, text="Preset:").grid(row=1, column=0, sticky="w", pady=(8, 0))
+        self._preset_var = ctk.StringVar(value=_NO_PRESET)
+        self._preset_menu = ctk.CTkOptionMenu(top, variable=self._preset_var,
+                                              values=[_NO_PRESET],
+                                              command=self._on_preset_selected)
+        self._preset_menu.grid(row=1, column=1, sticky="ew", padx=(6, 12), pady=(8, 0))
+
+        preset_btns = ctk.CTkFrame(top, fg_color="transparent")
+        preset_btns.grid(row=1, column=2, columnspan=3, sticky="w", pady=(8, 0))
+        ctk.CTkButton(preset_btns, text="Save preset", width=100,
+                      command=self._on_save_preset).pack(side="left", padx=(0, 6))
+        ctk.CTkButton(preset_btns, text="Delete", width=70,
+                      fg_color="gray30", hover_color="#a33",
+                      command=self._on_delete_preset).pack(side="left")
 
         self._editor = WordListEditor(self, self.censor_list,
                                       on_change=self._on_list_change)
@@ -110,8 +130,10 @@ class LiveModeWindow(ctk.CTkToplevel):
     def _refresh_devices(self) -> None:
         ins = list_input_devices()
         outs = list_output_devices()
-        in_names = [str(d) for d in ins] or ["-"]
-        out_names = [str(d) for d in outs] or ["-"]
+        self._in_display_to_name = {str(d): d.name for d in ins}
+        self._out_display_to_name = {str(d): d.name for d in outs}
+        in_names = list(self._in_display_to_name) or ["-"]
+        out_names = list(self._out_display_to_name) or ["-"]
         self._in_menu.configure(values=in_names)
         self._out_menu.configure(values=out_names)
         # Default selection = system default (first entry)
@@ -126,6 +148,60 @@ class LiveModeWindow(ctk.CTkToplevel):
             return int(display[1:closing])
         except Exception:
             return None
+
+
+    def _refresh_presets(self) -> None:
+        names = sorted(self.settings.live_presets)
+        self._preset_menu.configure(values=names or [_NO_PRESET])
+        if self._preset_var.get() not in names:
+            self._preset_var.set(names[0] if names else _NO_PRESET)
+
+    def _on_preset_selected(self, name: str) -> None:
+        preset = self.settings.live_presets.get(name)
+        if not preset:
+            return
+        self._refresh_devices()
+        self._select_device(self._in_var, self._in_menu, preset.get("input"), "input")
+        self._select_device(self._out_var, self._out_menu, preset.get("output"), "output")
+        if "lookahead" in preset:
+            self._lookahead_var.set(float(preset["lookahead"]))
+            self._update_lookahead_label(preset["lookahead"])
+        self._append_log(f"Preset applied: {name}")
+
+    def _select_device(self, var: ctk.StringVar, menu: ctk.CTkOptionMenu,
+                       name: str | None, kind: str) -> None:
+        if not name:
+            return
+        device = find_device_by_name(name, kind)
+        if device is None:
+            self._append_log(f"Preset {kind} device not found: {name}")
+            return
+        var.set(str(device))
+
+    def _on_save_preset(self) -> None:
+        dialog = ctk.CTkInputDialog(text="Preset name:", title="Save preset")
+        name = (dialog.get_input() or "").strip()
+        if not name:
+            return
+        self.settings.live_presets[name] = {
+            "input": self._in_display_to_name.get(self._in_var.get()),
+            "output": self._out_display_to_name.get(self._out_var.get()),
+            "lookahead": float(self._lookahead_var.get()),
+        }
+        self.settings.save()
+        self._refresh_presets()
+        self._preset_var.set(name)
+        self._append_log(f"Preset saved: {name}")
+
+    def _on_delete_preset(self) -> None:
+        name = self._preset_var.get()
+        if name not in self.settings.live_presets:
+            return
+        del self.settings.live_presets[name]
+        self.settings.save()
+        self._refresh_presets()
+        self._append_log(f"Preset deleted: {name}")
+
 
     def _on_list_change(self) -> None:
         if self._processor:
@@ -154,6 +230,7 @@ class LiveModeWindow(ctk.CTkToplevel):
             lookahead_seconds=float(self._lookahead_var.get()),
             input_device=in_dev,
             output_device=out_dev,
+            sfx_tail=self.settings.sfx_tail,
         )
 
         self._start_btn.configure(state="disabled", text="Loading model...")
@@ -198,7 +275,7 @@ class LiveModeWindow(ctk.CTkToplevel):
         self._start_btn.configure(state="normal", text="Start live censoring")
         self._append_log("Stopped.")
 
-    def destroy(self) -> None: 
+    def destroy(self) -> None:
         if self._processor is not None:
             try:
                 self._processor.stop()

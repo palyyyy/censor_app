@@ -11,7 +11,7 @@ APP_VERSION = "0.1.0"
 
 USER_CONFIG_DIR = Path.home() / ".censor_app"
 USER_CONFIG_FILE = USER_CONFIG_DIR / "settings.json"
-DEFAULT_SFX_DIR = USER_CONFIG_DIR / "sfx"
+STOCK_SFX_DIR = Path(__file__).resolve().parent / "SFX"
 TARGET_SAMPLE_RATE = 16_000          
 OUTPUT_SAMPLE_RATE = 44_100          
 BEEP_FREQ_HZ = 1000.0
@@ -36,6 +36,10 @@ class AppSettings:
 
     appearance: str = "system"                
     color_theme: str = "blue"
+
+    sfx_tail: bool = False
+
+    live_presets: dict[str, dict] = field(default_factory=dict)
 
     def save(self) -> None:
         USER_CONFIG_DIR.mkdir(parents=True, exist_ok=True)

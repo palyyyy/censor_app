@@ -1,0 +1,10 @@
+people
+money
+water
+house
+night
+right
+place
+world
+children
+government

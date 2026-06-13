@@ -9,9 +9,10 @@ _REGISTRY: dict[str, Type[STTEngine]] = {}
 
 def register_engine(cls: Type[STTEngine]) -> Type[STTEngine]:
     """Class decorator. Adds ``cls`` to the global registry under ``cls.name``."""
-    if not cls.name or cls.name == "abstract":
-        raise ValueError(f"Engine {cls!r} must set a non-empty .name")
-    _REGISTRY[cls.name] = cls
+    name = getattr(cls, "name", None)
+    if not name:
+        raise ValueError(f"Engine {cls!r} must declare a non-empty .name")
+    _REGISTRY[name] = cls
     return cls
 
 

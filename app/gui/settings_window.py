@@ -16,7 +16,7 @@ class SettingsWindow(ctk.CTkToplevel):
         self.on_save = on_save
 
         self.title("Settings")
-        self.geometry("520x480")
+        self.geometry("520x600")
         self.resizable(False, False)
 
         self.grid_columnconfigure(0, weight=1)
@@ -65,16 +65,23 @@ class SettingsWindow(ctk.CTkToplevel):
         self._lookahead_label.grid(row=8, column=0, sticky="w", padx=20)
         self._update_lookahead_label(self._lookahead_var.get())
 
-        ctk.CTkLabel(self, text="Appearance",
+        ctk.CTkLabel(self, text="Sound effects",
                      font=ctk.CTkFont(size=14, weight="bold")).grid(row=9, column=0, sticky="w", **pad)
+        self._sfx_tail_var = ctk.BooleanVar(value=self.settings.sfx_tail)
+        ctk.CTkSwitch(self, text="Let an SFX play past the censored word",
+                      variable=self._sfx_tail_var) \
+            .grid(row=10, column=0, sticky="w", padx=20, pady=(4, 0))
+
+        ctk.CTkLabel(self, text="Appearance",
+                     font=ctk.CTkFont(size=14, weight="bold")).grid(row=11, column=0, sticky="w", **pad)
         self._appearance_var = ctk.StringVar(value=self.settings.appearance)
         ctk.CTkOptionMenu(self, variable=self._appearance_var,
                           values=["system", "light", "dark"],
                           command=lambda v: ctk.set_appearance_mode(v)) \
-            .grid(row=10, column=0, sticky="ew", padx=20, pady=(4, 0))
+            .grid(row=12, column=0, sticky="ew", padx=20, pady=(4, 0))
 
         btns = ctk.CTkFrame(self, fg_color="transparent")
-        btns.grid(row=11, column=0, sticky="ew", padx=20, pady=16)
+        btns.grid(row=13, column=0, sticky="ew", padx=20, pady=16)
         btns.grid_columnconfigure(0, weight=1)
         ctk.CTkButton(btns, text="Cancel", fg_color="gray30", hover_color="gray25",
                       command=self.destroy).grid(row=0, column=0, sticky="e", padx=(0, 8))
@@ -117,6 +124,7 @@ class SettingsWindow(ctk.CTkToplevel):
         self.settings.stt_model = self._model_var.get()
         self.settings.language = self._lang_var.get().strip() or "en"
         self.settings.lookahead_seconds = float(self._lookahead_var.get())
+        self.settings.sfx_tail = bool(self._sfx_tail_var.get())
         self.settings.appearance = self._appearance_var.get()
         self.settings.save()
         if self.on_save:

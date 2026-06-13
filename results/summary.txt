@@ -1,0 +1,15 @@
+Target words: people, money, water, house, night, right, place, world, children, government
+
+model       mode   chunk  occur  recall%   miss%   prec%     RTF
+tiny.en     file       -     20     90.0    10.0    85.7   0.079
+tiny.en     live     1.0     20     85.0    15.0    47.2   0.351
+tiny.en     live     2.0     20     90.0    10.0    66.7   0.184
+tiny.en     live     4.0     20     90.0    10.0    69.2   0.107
+base.en     file       -     20     90.0    10.0    85.7   0.111
+base.en     live     1.0     20     90.0    10.0    60.0   1.164
+base.en     live     2.0     20     90.0    10.0    66.7   0.484
+base.en     live     4.0     20     90.0    10.0    75.0   0.212
+small.en    file       -     20     95.0     5.0    86.4   0.302
+small.en    live     1.0     20     85.0    15.0    56.7   1.647
+small.en    live     2.0     20     85.0    15.0    73.9   0.839
+small.en    live     4.0     20     90.0    10.0    81.8   0.474

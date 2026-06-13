@@ -7,7 +7,9 @@ from typing import Callable
 import numpy as np
 import soundfile as sf
 
+import app.audio.censor_effects  # noqa: F401  (registers the concrete effects)
 from app.censor import CensorList, WordMatcher, apply_censors
+from app.censor.effects import EffectOptions, create_effects
 from app.stt import STTEngine, Transcript
 from app.utils.logger import get_logger
 
@@ -32,7 +34,6 @@ def _load_audio_mono(path: Path) -> tuple[np.ndarray, int]:
         samples = np.array(seg.get_array_of_samples(), dtype=np.float32)
         if seg.channels > 1:
             samples = samples.reshape(-1, seg.channels).mean(axis=1)
-        # pydub returns signed int samples; normalize
         max_val = float(1 << (8 * seg.sample_width - 1))
         data = samples / max_val
     else:
@@ -47,9 +48,7 @@ def _save_audio(path: Path, audio: np.ndarray, sample_rate: int) -> None:
     if suffix in (".wav", ".flac", ".ogg"):
         sf.write(str(path), audio, sample_rate)
     elif suffix == ".mp3":
-        # soundfile can't encode mp3; go via pydub+ffmpeg.
         from pydub import AudioSegment
-        # pydub wants int16 PCM
         pcm16 = np.clip(audio, -1.0, 1.0)
         pcm16 = (pcm16 * 32767.0).astype(np.int16)
         seg = AudioSegment(
@@ -70,7 +69,15 @@ def process_file(
     engine: STTEngine,
     censor_list: CensorList,
     progress_cb: Callable[[str], None] | None = None,
+    effect_options: EffectOptions | None = None,
+    transcript: Transcript | None = None,
 ) -> FileProcessResult:
+    """Censor ``input_path`` and write the audio and a transcript.
+
+    ``effect_options`` configures the replacement effects (e.g. whether a
+    sound effect may ring out past the censored word). A previously obtained
+    ``transcript`` of the same file can be passed in to skip transcription.
+    """
     input_path = Path(input_path)
     output_audio_path = Path(output_audio_path)
     output_transcript_path = Path(output_transcript_path)
@@ -85,13 +92,18 @@ def process_file(
     dur = len(audio) / sr
     progress(f"Loaded {dur:.1f}s of audio at {sr} Hz")
 
-    progress("Transcribing... (this can take a while for large files)")
-    transcript = engine.transcribe_file(input_path)
-    progress(f"Transcribed {len(transcript.words)} words")
+    if transcript is None:
+        progress("Transcribing... (this can take a while for large files)")
+        transcript = engine.transcribe_file(input_path)
+        progress(f"Transcribed {len(transcript.words)} words")
+    else:
+        progress(f"Using cached transcript ({len(transcript.words)} words)")
 
     matcher = WordMatcher(censor_list)
+    effects = create_effects(effect_options)
     progress("Applying censors...")
-    censored_audio, censored_words = apply_censors(audio, sr, transcript.words, matcher)
+    censored_audio, censored_words = apply_censors(
+        audio, sr, transcript.words, matcher, effects)
     progress(f"Censored {len(censored_words)} word(s)")
 
     progress(f"Writing audio to {output_audio_path.name}")
