@@ -7,6 +7,7 @@ from tkinter import filedialog, messagebox
 import customtkinter as ctk
 
 from app.audio.file_processor import process_file
+from app.audio.sfx_library import stop_preview
 from app.censor import CensorList, find_word_occurrences, format_timestamp
 from app.censor.effects import EffectOptions
 from app.stt import Transcript, get_engine
@@ -133,7 +134,10 @@ class FileModeWindow(ctk.CTkToplevel):
         if not path:
             return
         self._input_path = Path(path)
-        self._path_label.configure(text=self._input_path.name, text_color=None)
+        self._path_label.configure(
+            text=self._input_path.name,
+            text_color=ctk.ThemeManager.theme["CTkLabel"]["text_color"],
+        )
         self._cached_transcript = None
         self._cached_for = None
 
@@ -252,3 +256,7 @@ class FileModeWindow(ctk.CTkToplevel):
             return
         times = ", ".join(format_timestamp(w.start) for w in hits)
         self._log(f'"{query}" — {len(hits)} occurrence(s) at: {times}')
+
+    def destroy(self) -> None:
+        stop_preview()
+        super().destroy()

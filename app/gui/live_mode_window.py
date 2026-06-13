@@ -8,6 +8,7 @@ import customtkinter as ctk
 from app.audio.device_manager import (find_device_by_name, list_input_devices,
                                       list_output_devices)
 from app.audio.live_processor import LiveConfig, LiveProcessor
+from app.audio.sfx_library import stop_preview
 from app.censor import CensorList
 from app.stt import get_engine
 from app.stt.base import Word
@@ -276,6 +277,7 @@ class LiveModeWindow(ctk.CTkToplevel):
         self._append_log("Stopped.")
 
     def destroy(self) -> None:
+        stop_preview()
         if self._processor is not None:
             try:
                 self._processor.stop()

@@ -10,8 +10,10 @@ import soundfile as sf
 import app.audio.censor_effects  # noqa: F401  (registers the concrete effects)
 from app.censor import CensorList, WordMatcher, apply_censors
 from app.censor.effects import EffectOptions, create_effects
-from app.stt import STTEngine, Transcript
+from app.stt import STTEngine, Transcript, Word
 from app.utils.logger import get_logger
+
+from .audio_io import decode_audio_file
 
 log = get_logger(__name__)
 
@@ -21,25 +23,7 @@ class FileProcessResult:
     audio_out_path: Path
     transcript_path: Path
     transcript: Transcript
-    censored_words: list
-
-
-def _load_audio_mono(path: Path) -> tuple[np.ndarray, int]:
-    try:
-        data, sr = sf.read(str(path), dtype="float32", always_2d=False)
-    except RuntimeError:
-        from pydub import AudioSegment
-        seg = AudioSegment.from_file(str(path))
-        sr = seg.frame_rate
-        samples = np.array(seg.get_array_of_samples(), dtype=np.float32)
-        if seg.channels > 1:
-            samples = samples.reshape(-1, seg.channels).mean(axis=1)
-        max_val = float(1 << (8 * seg.sample_width - 1))
-        data = samples / max_val
-    else:
-        if data.ndim > 1:
-            data = data.mean(axis=1).astype(np.float32)
-    return data.astype(np.float32), int(sr)
+    censored_words: list[Word]
 
 
 def _save_audio(path: Path, audio: np.ndarray, sample_rate: int) -> None:
@@ -88,7 +72,7 @@ def process_file(
             progress_cb(msg)
 
     progress("Loading audio...")
-    audio, sr = _load_audio_mono(input_path)
+    audio, sr = decode_audio_file(input_path)
     dur = len(audio) / sr
     progress(f"Loaded {dur:.1f}s of audio at {sr} Hz")
 
@@ -122,7 +106,7 @@ def process_file(
     )
 
 
-def _format_transcript(transcript: Transcript, censored_words: list) -> str:
+def _format_transcript(transcript: Transcript, censored_words: list[Word]) -> str:
     censored_ids = {id(w) for w in censored_words}
     lines = ["# Transcript", ""]
     lines.append(transcript.text)

@@ -7,6 +7,7 @@ from typing import Sequence
 import numpy as np
 
 from app.utils.logger import get_logger
+from config import TARGET_SAMPLE_RATE
 
 from .base import STTEngine, Transcript, Word
 from .registry import register_engine
@@ -105,7 +106,7 @@ class MLXWhisperEngine(STTEngine):
         sample_rate: int,
         time_offset: float = 0.0,
     ) -> list[Word]:
-        if sample_rate != 16000:
+        if sample_rate != TARGET_SAMPLE_RATE:
             from scipy.signal import resample_poly
-            pcm_float32 = resample_poly(pcm_float32, 16000, sample_rate).astype(np.float32)
+            pcm_float32 = resample_poly(pcm_float32, TARGET_SAMPLE_RATE, sample_rate).astype(np.float32)
         return self._transcribe(pcm_float32.astype(np.float32), time_offset=time_offset)

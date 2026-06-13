@@ -3,7 +3,7 @@ from __future__ import annotations
 import threading
 import time
 from dataclasses import dataclass
-from typing import Callable, Optional
+from typing import Callable
 
 import numpy as np
 import sounddevice as sd
@@ -13,6 +13,7 @@ from app.censor import CensorList, WordMatcher
 from app.censor.effects import EffectOptions, create_effects
 from app.stt.base import STTEngine, Word
 from app.utils.logger import get_logger
+from config import TARGET_SAMPLE_RATE
 
 log = get_logger(__name__)
 
@@ -21,7 +22,7 @@ _OVERLAP_SECONDS = 0.25  # window overlap that protects words on chunk boundarie
 
 @dataclass
 class LiveConfig:
-    sample_rate: int = 16000
+    sample_rate: int = TARGET_SAMPLE_RATE
     block_size: int = 1024
     chunk_seconds: float = 1.0
     lookahead_seconds: float = 2.0
@@ -54,6 +55,10 @@ class LiveProcessor:
 
         self._ring: np.ndarray | None = None
         self._ring_lock = threading.Lock()
+        # _write_idx and _play_idx are plain ints shared across the input,
+        # output, and STT threads. They are only ever incremented and are
+        # read without the lock, which is safe because int access is atomic
+        # under the GIL and a slightly stale read is harmless here.
         self._write_idx = 0
         self._play_idx = 0
 
@@ -170,7 +175,7 @@ class LiveProcessor:
         return out
 
 
-    def _on_input(self, indata, frames, time_info, status):  # noqa: D401
+    def _on_input(self, indata, frames, time_info, status):
         if status:
             log.debug("input status: %s", status)
         self._ring_write(indata[:, 0].copy() if indata.ndim > 1 else indata.copy())
@@ -243,15 +248,24 @@ class LiveProcessor:
 
 
     def _stt_loop(self) -> None:
-        """Repeatedly transcribe the newest window and queue matched effects."""
+        """Repeatedly transcribe the newest window and queue matched effects.
+
+        Any error while handling a window (for example, a corrupt SFX file
+        failing to load) is logged and skipped so the transcription thread
+        keeps running instead of dying silently.
+        """
         while not self._stop_evt.is_set():
             bounds = self._next_window()
             if bounds is None:
                 time.sleep(0.02)
                 continue
             start, end = bounds
-            self._handle_words(self._transcribe(start, end))
-            self._last_stt_end_sample = end
+            try:
+                self._handle_words(self._transcribe(start, end))
+            except Exception:
+                log.warning("live window handling failed", exc_info=True)
+            finally:
+                self._last_stt_end_sample = end
 
     def _next_window(self) -> tuple[int, int] | None:
         """Sample bounds of the next transcription window, or None if there is
@@ -315,4 +329,4 @@ class LiveProcessor:
             try:
                 self.on_word(word, censored)
             except Exception:
-                pass
+                log.debug("on_word callback raised", exc_info=True)

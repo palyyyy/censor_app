@@ -12,29 +12,25 @@ APP_VERSION = "0.1.0"
 USER_CONFIG_DIR = Path.home() / ".censor_app"
 USER_CONFIG_FILE = USER_CONFIG_DIR / "settings.json"
 STOCK_SFX_DIR = Path(__file__).resolve().parent / "SFX"
-TARGET_SAMPLE_RATE = 16_000          
-OUTPUT_SAMPLE_RATE = 44_100          
+TARGET_SAMPLE_RATE = 16_000
 BEEP_FREQ_HZ = 1000.0
-BEEP_AMPLITUDE = 0.35                
+BEEP_AMPLITUDE = 0.35
 
 
 @dataclass
 class AppSettings:
     """User-configurable settings. Persisted to JSON."""
 
-    stt_engine: str = "faster-whisper"        
-    stt_model: str = "small.en"               
-    language: str = "en"                      
+    stt_engine: str = "faster-whisper"
+    stt_model: str = "small.en"
+    language: str = "en"
 
-    lookahead_seconds: float = 2.0            
-    chunk_seconds: float = 1.0                
-    input_device: str | None = None           
+    lookahead_seconds: float = 2.0
+    chunk_seconds: float = 1.0
+    input_device: str | None = None
     output_device: str | None = None
 
-    default_mode: str = "beep"                
-    default_sfx_path: str | None = None       
-
-    appearance: str = "system"                
+    appearance: str = "system"
     color_theme: str = "blue"
 
     sfx_tail: bool = False

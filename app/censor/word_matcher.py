@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-from typing import Iterable
-
 from .censor_rules import CensorList, CensorRule, normalize_token
 
 
@@ -22,6 +20,3 @@ class WordMatcher:
         if not key:
             return None
         return self._index.get(key)
-
-    def any_match(self, tokens: Iterable[str]) -> bool:
-        return any(self.match(t) for t in tokens)

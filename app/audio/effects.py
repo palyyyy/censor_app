@@ -4,10 +4,11 @@ from functools import lru_cache
 from pathlib import Path
 
 import numpy as np
-import soundfile as sf
 from scipy.signal import resample_poly
 
 from config import BEEP_AMPLITUDE, BEEP_FREQ_HZ
+
+from .audio_io import decode_audio_file
 
 
 def generate_beep(duration_s: float, sample_rate: int,
@@ -34,19 +35,7 @@ def generate_silence(duration_s: float, sample_rate: int) -> np.ndarray:
 
 @lru_cache(maxsize=32)
 def _load_sfx_cached(path: str, sample_rate: int) -> np.ndarray:
-    try:
-        data, sr = sf.read(path, dtype="float32", always_2d=False)
-    except Exception:
-        from pydub import AudioSegment
-        seg = AudioSegment.from_file(path)
-        sr = seg.frame_rate
-        samples = np.array(seg.get_array_of_samples(), dtype=np.float32)
-        if seg.channels > 1:
-            samples = samples.reshape(-1, seg.channels).mean(axis=1)
-        max_val = float(1 << (8 * seg.sample_width - 1))
-        data = samples / max_val
-    if data.ndim > 1:
-        data = data.mean(axis=1)
+    data, sr = decode_audio_file(path)
     if sr != sample_rate:
         data = resample_poly(data, sample_rate, sr).astype(np.float32)
     return data.astype(np.float32)

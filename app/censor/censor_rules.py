@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Iterable, Iterator
+from typing import Iterator
 
 _PUNCT = ".,!?;:'\"()[]{}"
 
@@ -66,12 +66,3 @@ class CensorList:
             if r.normalized_word == key:
                 return r
         return None
-
-    def from_iterable(self, words: Iterable[str], mode: CensorMode = CensorMode.BEEP) -> None:
-        for w in words:
-            w = w.strip()
-            if w:
-                self.add(CensorRule(word=w, mode=mode))
-
-    def words(self) -> list[str]:
-        return [r.word for r in self.rules]
