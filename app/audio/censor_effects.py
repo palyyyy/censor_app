@@ -1,12 +1,3 @@
-"""Concrete censor effects: how each ``CensorMode`` actually sounds.
-
-These classes implement the ``CensorEffect`` contract from the censor layer
-and register themselves with its effect registry. The sound effect plays at
-its natural speed from the first sample of the censored word; if it is
-shorter than the word, the remainder of the region is silence, and if it is
-longer, the surplus either is cut off or becomes a tail that rings out over
-the following audio, depending on ``EffectOptions.sfx_tail``.
-"""
 from __future__ import annotations
 
 import numpy as np

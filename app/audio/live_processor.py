@@ -76,9 +76,6 @@ class LiveProcessor:
     def _sample_to_time(self, sample_idx: int) -> float:
         return sample_idx / self.config.sample_rate
 
-    # ------------------------------------------------------------------
-    # Lifecycle
-
     def start(self) -> None:
         if self._in_stream is not None:
             return
@@ -136,9 +133,6 @@ class LiveProcessor:
             self._stt_thread = None
         log.info("Live processor stopped")
 
-    # ------------------------------------------------------------------
-    # Ring buffer
-
     def _ring_write(self, samples: np.ndarray) -> None:
         assert self._ring is not None
         n = samples.size
@@ -175,8 +169,6 @@ class LiveProcessor:
                 out[first:n] = self._ring[:n - first]
         return out
 
-    # ------------------------------------------------------------------
-    # Audio callbacks
 
     def _on_input(self, indata, frames, time_info, status):  # noqa: D401
         if status:
@@ -211,8 +203,6 @@ class LiveProcessor:
             outdata[:] = block
         self._play_idx = end
 
-    # ------------------------------------------------------------------
-    # Effect splicing
 
     def _splice_censors(self, block: np.ndarray, start_sample: int) -> np.ndarray:
         """Overlay every active effect on ``block`` and retire finished ones."""
@@ -251,8 +241,6 @@ class LiveProcessor:
             mixed = block[d0 + split:d0 + n] + src[split:]
             block[d0 + split:d0 + n] = np.clip(mixed, -1.0, 1.0)
 
-    # ------------------------------------------------------------------
-    # Transcription thread
 
     def _stt_loop(self) -> None:
         """Repeatedly transcribe the newest window and queue matched effects."""

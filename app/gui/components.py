@@ -71,9 +71,6 @@ class WordListEditor(ctk.CTkFrame):
 
         self._render_rows()
 
-    # ------------------------------------------------------------------
-    # Rendering
-
     def _render_rows(self) -> None:
         for widget in self._rows_frame.winfo_children():
             widget.destroy()
@@ -108,8 +105,6 @@ class WordListEditor(ctk.CTkFrame):
 
         is_sfx = rule.mode == CensorMode.SFX
 
-        # SFX dropdown: stock files by name + a Browse entry. A custom clip
-        # the user browsed to is prepended so the dropdown shows it selected.
         values = list(name_to_path)
         selected = _NO_SFX_LABEL
         if rule.sfx_path:
@@ -147,8 +142,6 @@ class WordListEditor(ctk.CTkFrame):
         if self._on_change:
             self._on_change()
 
-    # ------------------------------------------------------------------
-    # Row actions
 
     def _on_add(self, *_args) -> None:
         word = self._new_word_var.get().strip()
@@ -206,8 +199,6 @@ class WordListEditor(ctk.CTkFrame):
         try:
             preview_sfx(rule.sfx_path)
         except Exception:
-            # Preview is non-critical; never let an audio-device error
-            # break the editor.
             pass
 
     def _assign_default_sfx(self, rule: CensorRule) -> None:
@@ -216,9 +207,6 @@ class WordListEditor(ctk.CTkFrame):
         stock = list_stock_sfx()
         if stock:
             rule.sfx_path = str(stock[0])
-
-    # ------------------------------------------------------------------
-    # Bulk actions
 
     def _on_import(self) -> None:
         path = filedialog.askopenfilename(
