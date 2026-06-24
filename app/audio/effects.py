@@ -19,12 +19,17 @@ def generate_beep(duration_s: float, sample_rate: int,
     n = max(1, int(round(duration_s * sample_rate)))
     t = np.arange(n, dtype=np.float32) / sample_rate
     signal = amplitude * np.sin(2.0 * np.pi * frequency * t).astype(np.float32)
+    return _apply_fade(signal, int(fade_ms * 1e-3 * sample_rate))
 
-    fade_samples = min(int(fade_ms * 1e-3 * sample_rate), n // 2)
-    if fade_samples > 0:
-        ramp = np.linspace(0.0, 1.0, fade_samples, dtype=np.float32)
-        signal[:fade_samples] *= ramp
-        signal[-fade_samples:] *= ramp[::-1]
+
+def _apply_fade(signal: np.ndarray, fade_samples: int) -> np.ndarray:
+    """Ramp the first and last ``fade_samples`` up from and down to zero, so a
+    generated tone starts and ends without an audible click."""
+    fade = min(fade_samples, signal.size // 2)
+    if fade > 0:
+        ramp = np.linspace(0.0, 1.0, fade, dtype=np.float32)
+        signal[:fade] *= ramp
+        signal[-fade:] *= ramp[::-1]
     return signal
 
 

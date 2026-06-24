@@ -1,19 +1,44 @@
+# ---- Python ----
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.eggs/
+build/
+dist/
+
+# ---- Virtual environments ----
 .venv/
 venv/
 env/
-__pycache__/
-*.py[cod]
+ENV/
+
+# ---- Test / type / lint caches ----
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# ---- macOS ----
 .DS_Store
-Thumbs.db
+__MACOSX/
+._*
+
+# ---- Editor / IDE ----
 .vscode/
 .idea/
-*.log
-*_censored.wav
-*_censored.mp3
-eval_harness.py
+
+# ---- Generated benchmark & evaluation output ----
 results/
+results_selftest/
+
+# ---- Archives / packaging ----
+*.zip
+eval_harness.py
 targets.txt
-__pycache__/
-*.pyc
-.DS_Store
-.venv/
+bench_resources.py
+gpu_bench.py
+gpu_mlx-whisper.txt
+gpu_idle.txt
+gpu_faster-whisper.txt

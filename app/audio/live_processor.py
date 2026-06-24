@@ -140,18 +140,21 @@ class LiveProcessor:
 
     def _ring_write(self, samples: np.ndarray) -> None:
         assert self._ring is not None
-        n = samples.size
-        size = self._ring.size
         with self._ring_lock:
-            start = self._write_idx % size
-            end = start + n
-            if end <= size:
-                self._ring[start:end] = samples
-            else:
-                first = size - start
-                self._ring[start:] = samples[:first]
-                self._ring[:n - first] = samples[first:]
-            self._write_idx += n
+            self._write_at(self._write_idx % self._ring.size, samples)
+            self._write_idx += samples.size
+
+    def _write_at(self, start: int, samples: np.ndarray) -> None:
+        """Copy ``samples`` into the ring at ``start``, wrapping past the end."""
+        size = self._ring.size
+        n = samples.size
+        end = start + n
+        if end <= size:
+            self._ring[start:end] = samples
+        else:
+            first = size - start
+            self._ring[start:] = samples[:first]
+            self._ring[:n - first] = samples[first:]
 
     def _ring_read(self, sample_idx: int, n: int) -> np.ndarray:
         """Read ``n`` samples starting at absolute ``sample_idx``."""
@@ -183,49 +186,49 @@ class LiveProcessor:
     def _on_output(self, outdata, frames, time_info, status):
         if status:
             log.debug("output status: %s", status)
-
-        sr = self.config.sample_rate
-        lookahead_samples = int(self.config.lookahead_seconds * sr)
-
-        desired = self._write_idx - lookahead_samples
-
-        if desired < 0 or desired < self._play_idx:
+        if not self._output_ready():
             outdata.fill(0.0)
             return
+        block = self._ring_read(self._play_idx, frames)
+        block = self._splice_censors(block, start_sample=self._play_idx)
+        self._write_output(outdata, block, frames)
+        self._play_idx += frames
 
-        start = self._play_idx
-        end = start + frames
+    def _output_ready(self) -> bool:
+        """True once enough audio is buffered to play one lookahead interval
+        behind the most recent input."""
+        lookahead = int(self.config.lookahead_seconds * self.config.sample_rate)
+        desired = self._write_idx - lookahead
+        return desired >= 0 and desired >= self._play_idx
 
-        block = self._ring_read(start, frames)
-        block = self._splice_censors(block, start_sample=start)
-
+    @staticmethod
+    def _write_output(outdata, block: np.ndarray, frames: int) -> None:
         if block.size < frames:
             block = np.pad(block, (0, frames - block.size))
-
         if outdata.ndim == 2:
             outdata[:, 0] = block
         else:
             outdata[:] = block
-        self._play_idx = end
 
 
     def _splice_censors(self, block: np.ndarray, start_sample: int) -> np.ndarray:
         """Overlay every active effect on ``block`` and retire finished ones."""
         block_end = start_sample + block.size
         with self._active_lock:
-            if not self._active:
-                return block
-            still_active: list[_ActiveEffect] = []
-            for eff in self._active:
-                eff_end = eff.start_sample + eff.audio.size
-                if eff_end <= start_sample:
-                    continue  # entirely in the past
-                if eff.start_sample < block_end:
-                    self._apply_effect(block, start_sample, eff)
-                if eff_end > block_end:
-                    still_active.append(eff)
-            self._active = still_active
+            self._active = [eff for eff in self._active
+                            if self._splice_one(block, start_sample, block_end, eff)]
         return block
+
+    def _splice_one(self, block: np.ndarray, start_sample: int,
+                    block_end: int, eff: _ActiveEffect) -> bool:
+        """Apply ``eff`` to ``block`` where the two overlap; return False once
+        ``eff`` lies entirely in the past so the caller drops it."""
+        eff_end = eff.start_sample + eff.audio.size
+        if eff_end <= start_sample:
+            return False
+        if eff.start_sample < block_end:
+            self._apply_effect(block, start_sample, eff)
+        return eff_end > block_end
 
     @staticmethod
     def _apply_effect(block: np.ndarray, block_start: int, eff: _ActiveEffect) -> None:
@@ -248,24 +251,29 @@ class LiveProcessor:
 
 
     def _stt_loop(self) -> None:
-        """Repeatedly transcribe the newest window and queue matched effects.
-
-        Any error while handling a window (for example, a corrupt SFX file
-        failing to load) is logged and skipped so the transcription thread
-        keeps running instead of dying silently.
-        """
+        """Repeatedly fetch the newest window and hand it to ``_run_window``;
+        the loop itself only paces the polling."""
         while not self._stop_evt.is_set():
             bounds = self._next_window()
             if bounds is None:
                 time.sleep(0.02)
                 continue
-            start, end = bounds
-            try:
-                self._handle_words(self._transcribe(start, end))
-            except Exception:
-                log.warning("live window handling failed", exc_info=True)
-            finally:
-                self._last_stt_end_sample = end
+            self._run_window(*bounds)
+
+    def _run_window(self, start: int, end: int) -> None:
+        """Transcribe and handle one window, then advance the marker.
+
+        Any error while handling the window (for example, a corrupt SFX file
+        failing to load) is logged and skipped so the thread keeps running;
+        the ``finally`` clause still advances the marker so the same audio is
+        not retried.
+        """
+        try:
+            self._handle_words(self._transcribe(start, end))
+        except Exception:
+            log.warning("live window handling failed", exc_info=True)
+        finally:
+            self._last_stt_end_sample = end
 
     def _next_window(self) -> tuple[int, int] | None:
         """Sample bounds of the next transcription window, or None if there is
@@ -300,29 +308,35 @@ class LiveProcessor:
         not produce duplicate detections.
         """
         sr = self.config.sample_rate
-        pad = self.config.padding_ms * 1e-3
         for w in words:
             if w.end * sr < self._last_stt_end_sample:
                 continue  # already handled by the previous window
             rule = self.matcher.match(w.text)
             self._notify_word(w, censored=rule is not None)
-            if rule is None:
-                continue
-            effect = self._effects.get(rule.mode)
-            if effect is None:
-                continue
+            if rule is not None:
+                self._queue_effect(w, rule)
 
-            start = max(int(round((w.start - pad) * sr)), 0)
-            region = max(int(round((w.end + pad) * sr)) - start, 1)
-            rendered = effect.render(rule, region, sr)
-            audio = (np.concatenate([rendered.replacement, rendered.tail])
-                     if rendered.tail.size else rendered.replacement)
-            with self._active_lock:
-                self._active.append(_ActiveEffect(
-                    start_sample=start,
-                    replace_samples=region,
-                    audio=audio.astype(np.float32, copy=False),
-                ))
+    def _queue_effect(self, w: Word, rule) -> None:
+        """Render ``rule``'s effect for word ``w`` and append it to the active
+        list the output callback consumes."""
+        effect = self._effects.get(rule.mode)
+        if effect is None:
+            return
+        sr = self.config.sample_rate
+        pad = self.config.padding_ms * 1e-3
+        start = max(int(round((w.start - pad) * sr)), 0)
+        region = max(int(round((w.end + pad) * sr)) - start, 1)
+        self._append_effect(start, region, effect.render(rule, region, sr))
+
+    def _append_effect(self, start: int, region: int, rendered) -> None:
+        audio = (np.concatenate([rendered.replacement, rendered.tail])
+                 if rendered.tail.size else rendered.replacement)
+        with self._active_lock:
+            self._active.append(_ActiveEffect(
+                start_sample=start,
+                replace_samples=region,
+                audio=audio.astype(np.float32, copy=False),
+            ))
 
     def _notify_word(self, word: Word, censored: bool) -> None:
         if self.on_word:

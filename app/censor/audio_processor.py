@@ -40,23 +40,40 @@ def apply_censors(
         effect = effects.get(rule.mode)
         if effect is None:
             continue
-
-        start_s = max(0.0, w.start - pad)
-        end_s = min(len(audio) / sample_rate, w.end + pad)
-        if end_s <= start_s:
-            continue
-        start_i = int(round(start_s * sample_rate))
-        end_i = min(int(round(end_s * sample_rate)), out.size)
-        region_n = end_i - start_i
-        if region_n <= 0:
-            continue
-
-        rendered = effect.render(rule, region_n, sample_rate)
-        out[start_i:end_i] = rendered.replacement[:region_n]
-        _mix_tail(out, end_i, rendered.tail)
-        censored.append(w)
+        if _censor_word(out, w, rule, effect, sample_rate, pad):
+            censored.append(w)
 
     return out, censored
+
+
+def _censor_word(out: np.ndarray, word: Word, rule, effect: CensorEffect,
+                 sample_rate: int, pad: float) -> bool:
+    """Render ``rule``'s effect over ``word``'s padded region in ``out``.
+
+    Returns True if a region was written, or False if the word's timing
+    collapses to nothing once padded and clipped to the buffer.
+    """
+    bounds = _region_bounds(word, out.size, sample_rate, pad)
+    if bounds is None:
+        return False
+    start_i, end_i = bounds
+    rendered = effect.render(rule, end_i - start_i, sample_rate)
+    out[start_i:end_i] = rendered.replacement[:end_i - start_i]
+    _mix_tail(out, end_i, rendered.tail)
+    return True
+
+
+def _region_bounds(word: Word, total_samples: int, sample_rate: int,
+                   pad: float) -> tuple[int, int] | None:
+    """Sample range of ``word`` padded by ``pad`` seconds and clipped to the
+    buffer, or None if that range is empty."""
+    start_s = max(0.0, word.start - pad)
+    end_s = min(total_samples / sample_rate, word.end + pad)
+    if end_s <= start_s:
+        return None
+    start_i = int(round(start_s * sample_rate))
+    end_i = min(int(round(end_s * sample_rate)), total_samples)
+    return (start_i, end_i) if end_i > start_i else None
 
 
 def _mix_tail(out: np.ndarray, start_i: int, tail: np.ndarray) -> None:

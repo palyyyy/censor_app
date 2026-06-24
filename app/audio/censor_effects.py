@@ -40,16 +40,19 @@ class SfxEffect(CensorEffect):
 
     def render(self, rule: CensorRule, region_samples: int,
                sample_rate: int) -> EffectAudio:
-        if not rule.sfx_path:
-            # No clip configured: fall back to a beep so the word never leaks.
-            beep = generate_beep(region_samples / sample_rate, sample_rate)
-            return EffectAudio(replacement=_exactly(beep, region_samples))
-
-        clip = load_sfx_clip(rule.sfx_path, sample_rate)
-        if clip.size == 0:
-            return EffectAudio(
-                replacement=generate_silence(region_samples / sample_rate, sample_rate))
-
+        clip = self._load_clip(rule, region_samples, sample_rate)
         replacement = _exactly(clip, region_samples)
         tail = clip[region_samples:] if self.options.sfx_tail else np.zeros(0, dtype=np.float32)
         return EffectAudio(replacement=replacement, tail=tail)
+
+    @staticmethod
+    def _load_clip(rule: CensorRule, region_samples: int,
+                   sample_rate: int) -> np.ndarray:
+        """The configured clip, or a safe fallback that never leaves the word
+        audible: a beep when no clip is set, silence when the file is empty."""
+        if not rule.sfx_path:
+            return generate_beep(region_samples / sample_rate, sample_rate)
+        clip = load_sfx_clip(rule.sfx_path, sample_rate)
+        if clip.size == 0:
+            return generate_silence(region_samples / sample_rate, sample_rate)
+        return clip

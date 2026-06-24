@@ -1,4 +1,3 @@
-"""Audio file decoding shared by the file pipeline and the SFX loader."""
 from __future__ import annotations
 
 from pathlib import Path
